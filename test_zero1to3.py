@@ -18,7 +18,7 @@ if 'xl' in model_id:
     ckpt = "zero123-xl"
 else:
     ckpt = model_id.split('-')[-1]
-ckpt_path = os.path.join("ckpts", ckpt + ".ckpt")
+ckpt_path = os.path.join(ckpt_dir, ckpt + ".ckpt")
 assert model_id in ["kxic/zero123-105000", "kxic/zero123-165000", "kxic/zero123-xl"]
 assert os.path.exists(ckpt_path)
 
