@@ -14,7 +14,6 @@ import einops
 # from ...configuration_utils import FrozenDict
 # from ...models import AutoencoderKL, UNet2DConditionModel
 # from ...schedulers import KarrasDiffusionSchedulers
-# from ...loaders import FromSingleFileMixin
 # from ...utils import (
 #     deprecate,
 #     is_accelerate_available,
@@ -27,7 +26,6 @@ import einops
 # from . import StableDiffusionPipelineOutput
 # from .safety_checker import StableDiffusionSafetyChecker
 
-from diffusers.loaders import FromSingleFileMixin
 from diffusers import AutoencoderKL, UNet2DConditionModel, DiffusionPipeline
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput, StableDiffusionSafetyChecker
 from diffusers.schedulers import KarrasDiffusionSchedulers
@@ -44,7 +42,8 @@ import PIL
 import numpy as np
 import math
 import kornia
-
+from diffusers.configuration_utils import ConfigMixin
+from diffusers.models.modeling_utils import ModelMixin
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 # todo
@@ -63,7 +62,18 @@ EXAMPLE_DOC_STRING = """
 """
 
 
-class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
+class CCProjection(ModelMixin, ConfigMixin):
+    def __init__(self, in_channel=772, out_channel=768):
+        super().__init__()
+        self.in_channel = in_channel
+        self.out_channel = out_channel
+        self.projection = torch.nn.Linear(in_channel, out_channel)
+
+    def forward(self, x):
+        return self.projection(x)
+
+
+class Zero1to3StableDiffusionPipeline(DiffusionPipeline):
     r"""
     Pipeline for single view conditioned novel view generation using Zero1to3.
 
@@ -100,6 +110,7 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
         scheduler: KarrasDiffusionSchedulers,
         safety_checker: StableDiffusionSafetyChecker,
         feature_extractor: CLIPFeatureExtractor,
+        cc_projection: CCProjection,
         requires_safety_checker: bool = True,
     ):
         super().__init__()
@@ -175,6 +186,7 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
             scheduler=scheduler,
             safety_checker=safety_checker,
             feature_extractor=feature_extractor,
+            cc_projection=cc_projection,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.register_to_config(requires_safety_checker=requires_safety_checker)
@@ -422,13 +434,14 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
         return prompt_embeds
 
     def CLIP_preprocess(self, x):
+        dtype = x.dtype
         # following openai's implementation
         # TODO HF OpenAI CLIP preprocessing issue https://github.com/huggingface/transformers/issues/22505#issuecomment-1650170741
         # follow openai preprocessing to keep exact same, input tensor [-1, 1], otherwise the preprocessing will be different, https://github.com/huggingface/transformers/pull/22608
         if isinstance(x, torch.Tensor):
             if x.min() < -1.0 or x.max() > 1.0:
                 raise ValueError("Expected input tensor to have values in the range [-1, 1]")
-        x = kornia.geometry.resize(x, (224, 224), interpolation='bicubic', align_corners=True, antialias=False)
+        x = kornia.geometry.resize(x.to(torch.float32), (224, 224), interpolation='bicubic', align_corners=True, antialias=False).to(dtype=dtype)
         x = (x + 1.) / 2.
         # renormalize according to clip
         x = kornia.enhance.normalize(x, torch.Tensor([0.48145466, 0.4578275, 0.40821073]),
@@ -495,16 +508,18 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
 
     def _encode_pose(self, pose, device, num_images_per_prompt, do_classifier_free_guidance):
         dtype = next(self.cc_projection.parameters()).dtype
-        if isinstance(pose[0], list):
-            pose = torch.Tensor(pose)
+        if isinstance(pose, torch.Tensor):
+            pose_embeddings = pose.unsqueeze(1).to(device=device, dtype=dtype)
         else:
-            pose = torch.Tensor([pose])
-        assert pose.shape[1] == 3   # B,3
-        x, y, z = pose[:,0].unsqueeze(1), pose[:,1].unsqueeze(1), pose[:,2].unsqueeze(1)
-        pose_embeddings = torch.cat([torch.deg2rad(x),
-                                     torch.sin(torch.deg2rad(y)),
-                                     torch.cos(torch.deg2rad(y)),
-                                     z], dim=-1).unsqueeze(1).to(device=device, dtype=dtype)  # B, 1, 4
+            if isinstance(pose[0], list):
+                pose = torch.Tensor(pose)
+            else:
+                pose = torch.Tensor([pose])
+            x, y, z = pose[:,0].unsqueeze(1), pose[:,1].unsqueeze(1), pose[:,2].unsqueeze(1)
+            pose_embeddings = torch.cat([torch.deg2rad(x),
+                                         torch.sin(torch.deg2rad(y)),
+                                         torch.cos(torch.deg2rad(y)),
+                                         z], dim=-1).unsqueeze(1).to(device=device, dtype=dtype)  # B, 1, 4
         # duplicate pose embeddings for each generation per prompt, using mps friendly method
         bs_embed, seq_len, _ = pose_embeddings.shape
         pose_embeddings = pose_embeddings.repeat(1, num_images_per_prompt, 1)
@@ -523,6 +538,7 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
         pose_prompt_embeds = self._encode_pose(pose, device, num_images_per_prompt, False)
         prompt_embeds = torch.cat([img_prompt_embeds, pose_prompt_embeds], dim=-1)
         prompt_embeds = self.cc_projection(prompt_embeds)
+        # prompt_embeds = img_prompt_embeds
         # follow 0123, add negative prompt, after projection
         if do_classifier_free_guidance:
             negative_prompt = torch.zeros_like(prompt_embeds)
@@ -644,11 +660,11 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
 
         if isinstance(generator, list):
             init_latents = [
-                self.vae.encode(image[i : i + 1]).latent_dist.sample(generator[i]) for i in range(batch_size)
+                self.vae.encode(image[i : i + 1]).latent_dist.mode(generator[i]) for i in range(batch_size) # sample
             ]
             init_latents = torch.cat(init_latents, dim=0)
         else:
-            init_latents = self.vae.encode(image).latent_dist.sample(generator)
+            init_latents = self.vae.encode(image).latent_dist.mode()
 
         # init_latents = self.vae.config.scaling_factor * init_latents  # todo in original zero123's inference gradio_new.py, model.encode_first_stage() is not scaled by scaling_factor
         if batch_size > init_latents.shape[0]:
@@ -666,12 +682,12 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
         init_latents = init_latents.to(device=device, dtype=dtype)
         return init_latents
 
-    def load_cc_projection(self, pretrained_weights=None):
-        self.cc_projection = torch.nn.Linear(772, 768)
-        torch.nn.init.eye_(list(self.cc_projection.parameters())[0][:768, :768])
-        torch.nn.init.zeros_(list(self.cc_projection.parameters())[1])
-        if pretrained_weights is not None:
-            self.cc_projection.load_state_dict(pretrained_weights)
+    # def load_cc_projection(self, pretrained_weights=None):
+    #     self.cc_projection = torch.nn.Linear(772, 768)
+    #     torch.nn.init.eye_(list(self.cc_projection.parameters())[0][:768, :768])
+    #     torch.nn.init.zeros_(list(self.cc_projection.parameters())[1])
+    #     if pretrained_weights is not None:
+    #         self.cc_projection.load_state_dict(pretrained_weights)
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -817,6 +833,9 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
                                                generator,
                                                do_classifier_free_guidance)
 
+        # 7. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
+        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -835,7 +854,8 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline, FromSingleFileMixin):
                     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred.to(dtype=torch.float32), t, latents.to(dtype=torch.float32)).prev_sample.to(prompt_embeds.dtype)
+                # latents = self.scheduler.step(noise_pred.to(dtype=torch.float32), t, latents.to(dtype=torch.float32)).prev_sample.to(prompt_embeds.dtype)
+                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):

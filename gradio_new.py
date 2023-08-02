@@ -51,38 +51,12 @@ _ARTICLE = 'See uses.md'
 
 
 def load_model_from_config(model_id, device):
-    init_model_id = "lambdalabs/sd-image-variations-diffusers"
-    if 'xl' in model_id:
-        ckpt = "zero123-xl"
-    else:
-        ckpt = model_id.split('-')[-1]
-    ckpt_path = os.path.join("ckpts", ckpt + ".ckpt")
-    assert model_id in ["kxic/zero123-105000", "kxic/zero123-165000", "kxic/zero123-xl"]
-    assert os.path.exists(ckpt_path)
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained(init_model_id, subfolder="image_encoder",
-                                                                  revision="v2.0")
-    feature_extractor = CLIPImageProcessor.from_pretrained(init_model_id, subfolder="feature_extractor",
-                                                           revision="v2.0")
-    vae = AutoencoderKL.from_pretrained(init_model_id, subfolder="vae", revision="v2.0")
-    scheduler = DDIMScheduler.from_pretrained(init_model_id, subfolder="scheduler", revision="v2.0")
-
-    unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet")  # load 0123 unet weights, conv_in = 8, during training first 4 is inited from image variants ckpt, last 4 is inited from zero_init
-    pipe = Zero1to3StableDiffusionPipeline.from_pretrained(init_model_id, torch_dtype=torch.float32, vae=vae,
-                                                           image_encoder=image_encoder,
-                                                           feature_extractor=feature_extractor, text_encoder=None,
-                                                           unet=unet, scheduler=scheduler)
-
-    # load cc_projection layer 772 (768+4) -> 768
-    ckpt = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-    cc_projection_weights = {"weight": ckpt["cc_projection.weight"], "bias": ckpt["cc_projection.bias"]}
-    pipe.load_cc_projection(cc_projection_weights)  # todo convert to diffusers?
+    pipe = Zero1to3StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
 
     pipe.enable_xformers_memory_efficient_attention()
     pipe.enable_vae_tiling()
     pipe.enable_attention_slicing()
     pipe = pipe.to(device)
-    # todo hacky manually handle new module
-    pipe.cc_projection = pipe.cc_projection.to(pipe.device)
 
     # set to eval mode
     pipe.unet.eval()
