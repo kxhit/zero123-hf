@@ -33,21 +33,49 @@ python gradio_new.py
 ```
 
 ##  Training
-WIP, staytuned
+Download Zero123's Objaverse Renderings data:
+```commandline
+wget https://tri-ml-public.s3.amazonaws.com/datasets/views_release.tar.gz
+```
 
 Configure accelerator by
 ```commandline
 accelerate config
 ```
-Launch training by
+
+Launch training:
+
+Follow Original Zero123, fp32, gradient checkpointing, and EMA are turned on.
 ```commandline
 accelerate launch train_zero1to3.py \
 --train_data_dir /data/zero123/views_release \
 --pretrained_model_name_or_path lambdalabs/sd-image-variations-diffusers \
 --train_batch_size 192 \
 --dataloader_num_workers 16 \
---output_dir logs 
+--output_dir logs \
+--use_ema \
+--gradient_checkpointing \
+--mixed_precision no
 ```
+
+While bf16/fp16 is also supported by running below
+```commandline
+accelerate launch train_zero1to3.py \
+--train_data_dir /data/zero123/views_release \
+--pretrained_model_name_or_path lambdalabs/sd-image-variations-diffusers \
+--train_batch_size 192 \
+--dataloader_num_workers 16 \
+--output_dir logs \
+--use_ema \
+--gradient_checkpointing \
+--mixed_precision bf16
+```
+
+For monitoring training progress, we recommand [wandb](https://wandb.ai/site) for its simplicity and powerful features.
+```commandline
+wandb login
+```
+
 
 ##  Acknowledgement
 This repository is based on original [Zero1to3](https://github.com/cvlab-columbia/zero123) and popular HuggingFace diffusion framework [diffusers](https://github.com/huggingface/diffusers).
