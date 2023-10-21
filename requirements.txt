@@ -24,6 +24,6 @@ rich>=13.3.2
 lovely-numpy>=0.2.8
 lovely-tensors>=0.1.14
 plotly==5.13.1
-accelerate==0.21.0
+accelerate>=0.23.0
 pytorch-lightning==1.4.2
 wandb

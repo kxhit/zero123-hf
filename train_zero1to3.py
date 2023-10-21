@@ -831,7 +831,7 @@ def main(args):
         loss_epoch = 0.0
         num_train_elems = 0
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet), accelerator.accumulate(cc_projection):
+            with accelerator.accumulate(unet, cc_projection):
                 # Convert images to latent space
                 gt_image = batch["image_target"].to(dtype=weight_dtype)
                 input_image = batch["image_cond"].to(dtype=weight_dtype)
