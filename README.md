@@ -1,6 +1,8 @@
 # Zero-1-to-3: Zero-shot One Image to 3D Object
 
-A HuggingFace diffusers implementation of [Zero123](https://github.com/cvlab-columbia/zero123)
+A HuggingFace Diffusers implementation of [Zero123](https://github.com/cvlab-columbia/zero123).
+
+Merged into Diffusers Repo [here](https://github.com/huggingface/diffusers/blob/main/examples/community/pipeline_zero1to3.py).
 
 ##  Usage
 Pytorch 2.0 for faster training and inference.
