@@ -4,6 +4,9 @@ A HuggingFace Diffusers implementation of [Zero123](https://github.com/cvlab-col
 
 Merged into Diffusers Repo [here](https://github.com/huggingface/diffusers/blob/main/examples/community/pipeline_zero1to3.py).
 
+## Updates
+- 2024-01-28: Support [Stable-Zero123](https://huggingface.co/stabilityai/stable-zero123) from [Stability AI](https://stability.ai/news/stable-zero123-3d-generation).
+
 ##  Usage
 Pytorch 2.0 for faster training and inference.
 ```

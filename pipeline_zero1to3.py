@@ -190,7 +190,7 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline):
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.register_to_config(requires_safety_checker=requires_safety_checker)
-        # self.model_mode = None
+        self.stable_zero123 = False
 
     def enable_vae_slicing(self):
         r"""
@@ -516,6 +516,10 @@ class Zero1to3StableDiffusionPipeline(DiffusionPipeline):
             else:
                 pose = torch.Tensor([pose])
             x, y, z = pose[:,0].unsqueeze(1), pose[:,1].unsqueeze(1), pose[:,2].unsqueeze(1)
+            # according to https://github.com/threestudio-project/threestudio/commit/56564c88e0139bdd31b1585f8720a1ae6141f138#diff-7cab41ca8761951def6987763141c5cfe7b1e3c0d174ac3cb0f5b4ca8ec8309aR220
+            # stable-zero123 ignored camera distance, and put 90 degree to z axis
+            if self.stable_zero123:
+                z = torch.deg2rad(torch.zeros_like(z)+90.)
             pose_embeddings = torch.cat([torch.deg2rad(x),
                                          torch.sin(torch.deg2rad(y)),
                                          torch.cos(torch.deg2rad(y)),
